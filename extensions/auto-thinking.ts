@@ -320,7 +320,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function boundsLabel(): string {
-    if (!config.minLevel && !config.maxLevel) return 'none'
+    if (!config.minLevel && !config.maxLevel) return 'none — set minLevel/maxLevel in config.json to cap it'
     return `${config.minLevel ?? 'off'} … ${config.maxLevel ?? 'max'}`
   }
 
@@ -359,11 +359,11 @@ export default function (pi: ExtensionAPI) {
     const choice = await ctx.ui.select(
       'No classifier credential found, so decisions are running on the keyword fallback.\nPick one to connect:',
       [
-        'TypeSafe Jev (recommended) — sign up at console.typesafe.ai, then: /login typesafe',
-        'OpenRouter — one login covers Jev and Clef: /login openrouter',
-        'Cloudflare Workers AI — CLOUDFLARE_API_KEY + CLOUDFLARE_ACCOUNT_ID',
-        'OpenAI — OPENAI_API_KEY gives you GPT-6 Luna as a classifier',
-        'Keep the keyword fallback (coarse, but never blocks)',
+        'TypeSafe Jev (recommended)',
+        'OpenRouter',
+        'Cloudflare Workers AI',
+        'OpenAI (GPT-6 Luna)',
+        'Keep the keyword fallback',
       ],
     )
     if (!choice) return
