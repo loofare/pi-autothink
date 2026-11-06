@@ -1,4 +1,4 @@
-# pi-auto-thinking
+# pi-autothink
 
 A single-file [Pi](https://pi.dev) extension: **before every prompt, a classifier model decides how much thinking the task needs, and Pi switches the current model's thinking level to match.**
 
@@ -35,13 +35,13 @@ No classifier credentials? It still works: the extension falls back to a local k
 
 ```bash
 # from git
-pi install git:github.com/loofare/pi-auto-thinking
+pi install git:github.com/loofare/pi-autothink
 
 # from a local checkout (development)
-pi install ./pi-auto-thinking
+pi install ./pi-autothink
 
 # try once without adding it to settings
-pi -e /path/to/pi-auto-thinking
+pi -e /path/to/pi-autothink
 ```
 
 Restart Pi or `/reload` after installing. Check it loaded:

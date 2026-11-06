@@ -1,5 +1,5 @@
 {
-  "name": "pi-auto-thinking",
+  "name": "pi-autothink",
   "version": "0.1.0",
   "description": "Pi extension: let a classifier model pick the thinking level for every prompt, so mechanical prompts stay cheap and hard ones get real reasoning — without switching models.",
   "keywords": [
@@ -15,9 +15,9 @@
   "author": "loofare",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/loofare/pi-auto-thinking.git"
+    "url": "git+https://github.com/loofare/pi-autothink.git"
   },
-  "homepage": "https://github.com/loofare/pi-auto-thinking",
+  "homepage": "https://github.com/loofare/pi-autothink",
   "pi": {
     "extensions": [
       "./extensions/auto-thinking.ts"
@@ -31,5 +31,8 @@
     "extensions",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "bugs": {
+    "url": "https://github.com/loofare/pi-autothink/issues"
+  }
 }
