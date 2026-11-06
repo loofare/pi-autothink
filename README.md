@@ -34,7 +34,10 @@ No classifier credentials? It still works: the extension falls back to a local k
 ## Install
 
 ```bash
-# from git
+# from npm
+pi install npm:pi-autothink
+
+# or straight from git
 pi install git:github.com/loofare/pi-autothink
 
 # from a local checkout (development)
