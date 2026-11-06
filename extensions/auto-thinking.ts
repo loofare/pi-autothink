@@ -338,34 +338,73 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  /**
+   * Guided connection. Two ideas keep it short: this plugin never stores a key
+   * (Pi owns credentials), and every step ends with one copy-pasteable command.
+   */
   async function setup(ctx: ExtensionContext) {
     const model = await findClassifier(ctx, config.model)
     if (model) {
       ctx.ui.notify(
-        `autothink is ready: ${model.provider}/${model.id} (${precedence(`${model.provider}/${model.id}`)}).`,
+        [
+          `Ready: ${model.provider}/${model.id}`,
+          `source: ${precedence(`${model.provider}/${model.id}`)}`,
+          'Nothing else to configure. /autothink status shows each decision.',
+        ].join('\n'),
         'info',
       )
       return
     }
 
     const choice = await ctx.ui.select(
-      'No classifier credentials found. Which one do you want to connect?\n(After connecting, run /autothink setup again.)',
+      'No classifier credential found, so decisions are running on the keyword fallback.\nPick one to connect:',
       [
-        'TypeSafe Jev  — the default. Get a key at https://typesafe.ai, then run: /login typesafe',
-        'OpenRouter   — Jev and Clef. Sign in or paste a key with: /login openrouter',
+        'TypeSafe Jev (recommended) — sign up at console.typesafe.ai, then: /login typesafe',
+        'OpenRouter — one login covers Jev and Clef: /login openrouter',
         'Cloudflare Workers AI — CLOUDFLARE_API_KEY + CLOUDFLARE_ACCOUNT_ID',
-        'Keep using the keyword fallback for now',
+        'OpenAI — OPENAI_API_KEY gives you GPT-6 Luna as a classifier',
+        'Keep the keyword fallback (coarse, but never blocks)',
       ],
     )
-
     if (!choice) return
+
     if (choice.startsWith('TypeSafe')) {
-      ctx.ui.notify('Run /login typesafe in Pi and paste your TypeSafe API key.\nThen run /autothink setup again.', 'info')
+      ctx.ui.notify(
+        [
+          '1. Open https://console.typesafe.ai/home and create an API key.',
+          '2. Back in Pi, run:  /login typesafe',
+          '3. Paste the key when asked. Pi stores it in ~/.pi/agent/auth.json.',
+          '',
+          'Jev is hosted — there is nothing to install or run locally.',
+        ].join('\n'),
+        'info',
+      )
     } else if (choice.startsWith('OpenRouter')) {
-      ctx.ui.notify('Run /login openrouter in Pi (browser sign-in or API key).\nThen run /autothink setup again.', 'info')
+      ctx.ui.notify(
+        [
+          'Run:  /login openrouter',
+          'Sign in through the browser, or paste an API key. Pi saves it for you.',
+          'This also unlocks Clef, in case you ever want a second opinion.',
+        ].join('\n'),
+        'info',
+      )
     } else if (choice.startsWith('Cloudflare')) {
       ctx.ui.notify(
-        'Export CLOUDFLARE_API_KEY and CLOUDFLARE_ACCOUNT_ID, then restart Pi.\nOr add the provider to ~/.pi/agent/auth.json.',
+        [
+          'Export both, then restart Pi:',
+          '  export CLOUDFLARE_API_KEY=...',
+          '  export CLOUDFLARE_ACCOUNT_ID=...',
+          'Or add the provider to ~/.pi/agent/auth.json.',
+        ].join('\n'),
+        'info',
+      )
+    } else if (choice.startsWith('OpenAI')) {
+      ctx.ui.notify(
+        [
+          'Export it, then restart Pi:',
+          '  export OPENAI_API_KEY=...',
+          'GPT-6 Luna comes through the Decisions API; a ChatGPT login is not enough for it.',
+        ].join('\n'),
         'info',
       )
     } else {
@@ -373,7 +412,18 @@ export default function (pi: ExtensionAPI) {
         'Fine. The keyword fallback is coarse but never blocks: /autothink status shows which path each decision took.',
         'info',
       )
+      return
     }
+
+    const recheck = await ctx.ui.confirm('Connected?', 'Re-check for a classifier credential now?')
+    if (!recheck) return
+    const found = await findClassifier(ctx, config.model)
+    ctx.ui.notify(
+      found
+        ? `Connected: ${found.provider}/${found.id}. /autothink status shows each decision.`
+        : 'Still nothing. The credential may need a Pi restart or /reload — run /autothink setup again after that.',
+      found ? 'info' : 'warning',
+    )
   }
 
   pi.registerCommand('autothink', {

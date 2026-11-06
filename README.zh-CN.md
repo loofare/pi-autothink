@@ -42,26 +42,73 @@ pi install npm:pi-autothink          # 或：pi install git:github.com/loofare/p
 
 **默认开启**。关掉用 `/autothink off`，或启动时 `PI_AUTO_THINKING=0`。
 
-## 判档的这个模型，从哪来？
+## 怎么接上 JEV（5 分钟）
 
-这个插件**不自己存密钥**。它去问 Pi：现在哪些分类器已经有凭据了？用第一个能用的——默认就是 TypeSafe 的 JEV。也就是说，你在 Pi 里登录过一次，所有扩展都能用，不用每个插件单独配。
+**JEV 是托管服务，不用装、没有本地模型要下载。** 它就是个分类器：你给它一段文字，它回答一个问题。Pi 本来就会调它，你缺的只是一把凭据。
 
-```bash
-/autothink status     # 它找到了什么
-/autothink setup      # 什么都没有时，告诉你要跑哪一条命令
+这个插件**不存凭据**。它去问 Pi，Pi 把密钥放在 `~/.pi/agent/auth.json`。登录一次，所有 Pi 扩展都能用——**插件依赖 Pi 做鉴权，这是故意的**。
+
+### 1. 拿 key
+
+打开 **[console.typesafe.ai](https://console.typesafe.ai/home)**，注册或登录，创建一个 API key。
+
+### 2. 交给 Pi
+
+在 Pi 里跑：
+
+```
+/login typesafe
 ```
 
-| 你想用 | 怎么做 | 密钥存在哪 |
-|---|---|---|
-| TypeSafe Jev（默认） | `/login typesafe` | Pi 的 `auth.json`，或 `TYPESAFE_API_KEY` |
-| OpenRouter | `/login openrouter` | 浏览器登录或 `OPENROUTER_API_KEY`，能跑 Jev 和 Clef |
-| Cloudflare Workers AI | `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` | 环境变量，或 `auth.json` |
-| Vercel AI Gateway | `AI_GATEWAY_API_KEY` | 环境变量 |
-| OpenCode | `OPENCODE_API_KEY` | 环境变量 |
-| OpenAI（GPT-6 Luna） | `OPENAI_API_KEY` | 环境变量 |
-| 什么都不配 | 不用管 | 退回关键词判断，不会卡住你 |
+把 key 粘进去。Pi 会存到 `~/.pi/agent/auth.json`（权限 600），后面的事它自己处理。
 
-接完之后再跑一次 `/autothink setup`，它会重新探测并告诉你结果。
+### 3. 看插件找到了什么
+
+```
+/autothink status
+```
+
+正常应该是：
+
+```
+auto thinking: on
+classifier: typesafe/jev-latest
+classifier source: built-in candidate list
+level bounds: none
+current level: medium
+config: none (defaults)
+last decision: low (jev 1.06/5)
+```
+
+如果 `classifier:` 那行写的是 `none — keyword fallback`，说明还没接上：跑 `/autothink setup`，它会重新探测，并把每个选项对应的命令列给你。
+
+### 4. 之后不用管
+
+每条消息都会自动判。想调，看下面的配置文件。
+
+### 没有 TypeSafe 账号？还有五条路
+
+不管你走哪条，最后都是同一件事：凭据放 Pi 里，插件自己找。
+
+| 路子 | 命令 | 说明 |
+|---|---|---|
+| OpenRouter | `/login openrouter` | 一次登录同时拿到 Jev **和** Clef，很多人本来就有账号 |
+| Cloudflare Workers AI | `export CLOUDFLARE_API_KEY=...` + `CLOUDFLARE_ACCOUNT_ID` | 有免费额度，具体看他们的价格页 |
+| Vercel AI Gateway | `export AI_GATEWAY_API_KEY=...` | 走网关用 Jev |
+| OpenCode | `export OPENCODE_API_KEY=...` | Jev，只支持文本 |
+| OpenAI | `export OPENAI_API_KEY=...` | GPT-6 Luna，走 Decisions API；只有 ChatGPT 登录不够 |
+| 什么都不配 | — | 退回关键词判断：粗，但绝不卡住你 |
+
+### 出问题先看这张表
+
+| 现象 | 怎么办 |
+|---|---|
+| `classifier: none — keyword fallback` | 没找到凭据，跑 `/autothink setup` |
+| 刚登录了还是 none | 跑 `/reload` 或重启 Pi，再 `/autothink setup` |
+| 显示 `classifier source: config (…)` 但模型不对 | 你的 `config.json` 里 `model` 钉死了一个，删掉那行或改对 id |
+| 判得比实际需要低 | `"minLevel": "low"`（或 `medium`），这个下限永远生效 |
+| 大仓库里觉得太贵 | `"maxLevel": "high"` |
+| 想看它每次怎么判的 | 配置文件里 `"debug": true`，或 `PI_AUTO_THINKING_DEBUG=1` |
 
 ## 可选配置文件
 

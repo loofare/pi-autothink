@@ -42,26 +42,73 @@ Then restart Pi (or `/reload`) and check it is live:
 
 It is **on by default**. Turn it off with `/autothink off` or `PI_AUTO_THINKING=0`.
 
-## Where does the judging model come from?
+## Set up JEV (5 minutes)
 
-This plugin **stores no keys of its own**. It asks Pi which classifier models already have credentials and uses the first one that answers — TypeSafe Jev unless you say otherwise. That means one setup covers every Pi extension: log in once, and this works.
+**JEV is hosted — there is nothing to install and no local model to download.** It is a classifier that answers one question about a piece of text; Pi already knows how to call it. All that is missing is one credential.
 
-```bash
-/autothink status     # what did it find?
-/autothink setup      # nothing yet: tells you the one command to run
+This plugin never stores that credential. It asks Pi, and Pi keeps keys in `~/.pi/agent/auth.json`. Log in once and every Pi extension can use it — the plugin depends on Pi for auth, on purpose.
+
+### 1. Get a key
+
+Sign up at **[console.typesafe.ai](https://console.typesafe.ai/home)** and create an API key.
+
+### 2. Hand it to Pi
+
+Inside a Pi session:
+
+```
+/login typesafe
 ```
 
-| You want | Do this | Where the key lives |
-|---|---|---|
-| TypeSafe Jev (default) | `/login typesafe` | Pi's `auth.json`, or `TYPESAFE_API_KEY` |
-| OpenRouter | `/login openrouter` | OAuth sign-in or `OPENROUTER_API_KEY`; serves Jev and Clef |
-| Cloudflare Workers AI | `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` | environment, or `auth.json` |
-| Vercel AI Gateway | `AI_GATEWAY_API_KEY` | environment |
-| OpenCode | `OPENCODE_API_KEY` | environment |
-| OpenAI (GPT-6 Luna) | `OPENAI_API_KEY` | environment |
-| Nothing at all | do nothing | keyword fallback, never blocks the turn |
+Paste the key. Pi writes it to `~/.pi/agent/auth.json` (mode 600) and handles the rest.
 
-Run `/autothink setup` again afterwards; it re-checks and reports what it found.
+### 3. Check what the plugin found
+
+```
+/autothink status
+```
+
+A healthy install says:
+
+```
+auto thinking: on
+classifier: typesafe/jev-latest
+classifier source: built-in candidate list
+level bounds: none
+current level: medium
+config: none (defaults)
+last decision: low (jev 1.06/5)
+```
+
+If `classifier:` says `none — keyword fallback`, nothing is connected yet: run `/autothink setup`, which re-checks and shows the exact command for each option.
+
+### 4. Nothing to configure after that
+
+It runs on every prompt. Tune it later with the optional config file below.
+
+### No TypeSafe account? Five other routes
+
+Every one of these ends up in the same place: Pi holds the credential, the plugin finds it.
+
+| Route | Command | Notes |
+|---|---|---|
+| OpenRouter | `/login openrouter` | One login covers Jev **and** Clef. Many people already have an account |
+| Cloudflare Workers AI | `export CLOUDFLARE_API_KEY=...` + `CLOUDFLARE_ACCOUNT_ID` | Has a free allowance; see their pricing |
+| Vercel AI Gateway | `export AI_GATEWAY_API_KEY=...` | Jev through the gateway |
+| OpenCode | `export OPENCODE_API_KEY=...` | Jev, text only |
+| OpenAI | `export OPENAI_API_KEY=...` | GPT-6 Luna via the Decisions API; a ChatGPT login is not enough |
+| Nothing | — | Keyword fallback. Coarse, but it never blocks a turn |
+
+### Troubleshooting
+
+| Symptom | What to do |
+|---|---|
+| `classifier: none — keyword fallback` | No credential found. `/autothink setup` lists what to connect |
+| You just logged in but it still says none | Run `/reload`, or restart Pi, then `/autothink setup` again |
+| `classifier source: config (…)` but the model is wrong | Your `config.json` pins a `model`; delete that line or fix the id |
+| Decisions feel too cheap for your work | `"minLevel": "low"` (or `medium`) — the floor always applies |
+| Decisions feel expensive on a big repo | `"maxLevel": "high"` |
+| You want to watch it decide | `"debug": true` in the config file, or `PI_AUTO_THINKING_DEBUG=1` |
 
 ## Optional config file
 
