@@ -1,121 +1,131 @@
 # pi-autothink
 
-A single-file [Pi](https://pi.dev) extension: **before every prompt, a classifier model decides how much thinking the task needs, and Pi switches the current model's thinking level to match.**
+**English** · [中文说明](README.zh-CN.md)
 
-Same model, same context, same prompt cache — only the thinking level changes. A rename task stops paying for architecture-grade reasoning, and you stop deciding per message how deep the model should think.
+[![npm](https://img.shields.io/npm/v/pi-autothink.svg)](https://www.npmjs.com/package/pi-autothink)
+[![license](https://img.shields.io/npm/l/pi-autothink.svg)](./LICENSE)
+
+> A [Pi](https://pi.dev) extension that decides **how hard the model should think** before every turn.
+>
+> Typing `fix this typo` and `redesign the auth layer` no longer cost the same reasoning budget: a small classifier model scores the request, and Pi runs that turn at the matching thinking level.
+>
+> Same model. Same context. Same prompt cache. **Only the thinking level moves.**
 
 ```
-you type a message
-   ├─▶ classifier (TypeSafe Jev by default): "how much reasoning does this need?" → score 0–5
-   ├─▶ score → thinking level (minimal / low / medium / high / xhigh / max)
-   ├─▶ clamp to the levels your current model actually supports
-   └─▶ Pi runs the turn at that level; the decision is written to the session for audit
+  you type a message
+          │
+          ▼
+  ┌─────────────────────────┐      score 0–5
+  │  classifier (Jev)       │ ─────────────────┐
+  │  "how deep is this?"    │                  │
+  └─────────────────────────┘                  ▼
+                                     ┌──────────────────┐
+                                     │  thinking level  │
+                                     │ minimal … max    │
+                                     └────────┬─────────┘
+          ┌───────────────────────────────────┘
+          ▼
+  clamp to what your model supports  →  run the turn  →  log the decision to the session
 ```
 
-## Why
-
-Pi stores the thinking level with the model selection, so it stays wherever you left it. Most people leave it at max (safe, expensive, slow) or keep switching it by hand (cheap, but it costs attention and you get it wrong).
-
-Thinking tokens are billed as output. Reasoning through "fix this typo" at max effort is money and latency spent on nothing; reasoning through a migration script at the lowest level costs you a wrong edit and a rerun. This extension puts one cheap classifier call in front of the turn so the level follows the work.
-
-## Requirements
-
-1. **Pi with classifier-model support** (the `ctx.modelRegistry.classify()` API — Pi 1.4.0 or newer).
-2. **Credentials for at least one classifier model.** Pi ships Jev and Clef as built-in classifiers; any of these works:
-   - `TYPESAFE_API_KEY` (Jev, first choice)
-   - `OPENROUTER_API_KEY` or `/login` (Jev, Clef)
-   - `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` (Jev, Clef)
-   - `AI_GATEWAY_API_KEY` (Jev), `OPENCODE_API_KEY` (Jev)
-   - `OPENAI_API_KEY` (GPT-6 Luna via the Decisions API)
-3. **A model that supports thinking levels.** Without one, Pi clamps everything to `off`; the extension is harmless but pointless.
-
-No classifier credentials? It still works: the extension falls back to a local keyword heuristic instead of blocking the turn.
-
-## Install
+## Quick start
 
 ```bash
-# from npm
-pi install npm:pi-autothink
-
-# or straight from git
-pi install git:github.com/loofare/pi-autothink
-
-# from a local checkout (development)
-pi install ./pi-autothink
-
-# try once without adding it to settings
-pi -e /path/to/pi-autothink
+pi install npm:pi-autothink          # or: pi install git:github.com/loofare/pi-autothink
 ```
 
-Restart Pi or `/reload` after installing. Check it loaded:
+Then restart Pi (or `/reload`) and check it is live:
 
 ```
 /autothink status
 ```
+
+It is **on by default**. Turn it off with `/autothink off` or `PI_AUTO_THINKING=0`.
+
+## Why this exists
+
+Pi stores the thinking level next to the model selection, so it stays wherever you left it. That leaves two habits, both bad:
+
+| Habit | What it costs |
+|---|---|
+| Leave it at `max` forever | Typo fixes and one-line lookups pay architecture-grade reasoning: slower, more expensive, no better |
+| Switch it by hand per message | The switching itself eats attention, and you get it wrong at the worst moment |
+
+Thinking tokens are billed as output. This extension puts **one cheap classifier call** in front of each turn so the level follows the work instead of your mood.
+
+## Requirements
+
+| Requirement | Detail |
+|---|---|
+| Pi with classifier support | `ctx.modelRegistry.classify()` — Pi 1.4.0 or newer |
+| A classifier credential | Any **one** of: `TYPESAFE_API_KEY` (Jev, tried first), `OPENROUTER_API_KEY` / `/login`, `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID`, `AI_GATEWAY_API_KEY`, `OPENCODE_API_KEY`, `OPENAI_API_KEY` (GPT-6 Luna) |
+| A model with thinking levels | Without one, Pi clamps everything to `off`: harmless, pointless |
+
+**Missing the credential?** It still works. No classifier, an error, or a 4-second timeout falls back to a local keyword heuristic instead of blocking the turn.
+
+## How it decides
+
+The classifier gets one scored question — *how much internal reasoning does completing this request need? Judge the work itself, not its tone or length* — and answers on this scale:
+
+| Score | The work looks like | Level |
+|---:|---|---|
+| 0 | rename a variable, format a file, run a known command | `minimal` |
+| 1 | one small edit, a lookup | `low` |
+| 2 | an ordinary feature, fix, or explanation | `medium` |
+| 3 | multi-file change, non-obvious debugging, a design decision | `high` |
+| 4 | architecture, root cause, security, migration | `xhigh` |
+| 5 | subtle high-risk change across a large system | `max` |
+
+Two details that matter:
+
+- **Score 0 → `minimal`, never `off`.** Deciding *not to think at all* stays your call, not the classifier's.
+- **The result is clamped to your model.** The requested level is pulled to the nearest level the active model actually supports, so an unsupported level never reaches the provider.
+
+Request text is clipped to 6000 characters. Timeout is 4000 ms.
 
 ## Controls
 
 | Control | Effect |
 |---|---|
 | `/autothink on` · `/autothink off` | Toggle during a session |
-| `/autothink status` | On/off, which classifier was found, current level, last decision |
+| `/autothink status` | On/off, classifier found, current level, last decision |
 | `PI_AUTO_THINKING=0` | Disable for one process |
 | `pi --auto-thinking` | Force on for one process |
-| `PI_AUTO_THINKING_MODEL=provider/modelId` | Use a different classifier, e.g. `openai/gpt-6-luna` |
+| `PI_AUTO_THINKING_MODEL=provider/modelId` | Use another classifier, e.g. `openai/gpt-6-luna` |
 | `PI_AUTO_THINKING_DEBUG=1` | Print each decision to stderr |
 
-Enabled by default.
+## What it does not do
 
-## How it decides
+Being explicit about the edges is cheaper than debugging them later:
 
-The classifier is asked one scored question — *how much internal reasoning does completing this request need? Judge the work itself, not its tone or length* — on a six-point scale:
-
-| Score | Meaning | Level |
-|---:|---|---|
-| 0 | Mechanic: rename, format, run a known command | `minimal` |
-| 1 | Simple: one small edit, a lookup | `low` |
-| 2 | Standard: an ordinary feature, fix, or explanation | `medium` |
-| 3 | Hard: multi-file change, non-obvious debugging, a design decision | `high` |
-| 4 | Very hard: architecture, root cause, security, migration | `xhigh` |
-| 5 | Maximum: subtle high-risk change in a large system | `max` |
-
-Score 0 maps to `minimal`, not `off`: deciding *not to think at all* stays your call, not the classifier's.
-
-Request text is clipped to 6000 characters. The result is clamped to the levels the active model supports, nearest-first, so an unsupported level never reaches the provider.
-
-**Fallback.** No classifier, an error, or a 4000 ms timeout → a local heuristic keeps the turn moving: root-cause/security/architecture/migration wording → `xhigh`; planning/debugging/review wording → `high`; short mechanical prompts → `minimal`; otherwise `medium`. It never blocks.
+| It does not… | Why |
+|---|---|
+| change your model | Only the thinking level moves, so the prompt cache identity survives |
+| re-decide mid-turn | One decision per user prompt; tool loops inside that turn keep the level |
+| guarantee a correct score | It reads the sentence you wrote, not what the turn will turn out to need |
+| think for you when unsure | On failure it falls back to keywords, and always lets the turn run |
+| claim a measured saving | It reports a level distribution, not a benchmark |
+| load in foreground subagents | Detached (async) subagents do load it and decide for themselves; `async: false` ones run in-process without it and keep their configured level |
 
 ## Audit trail
 
-Every decision is appended to the session as an `auto-thinking` custom entry:
+Every decision lands in the session as an `auto-thinking` custom entry — outside the LLM context, with no prompt text, credentials, or user content:
 
 ```json
 {"requested":"medium","applied":"low","clamped":true,"source":"jev",
  "classifier":"typesafe/jev-latest","model":"some/model","detail":"jev 2.31/5"}
 ```
 
-Custom entries stay out of the LLM context. The prompt text, credentials, and any user content are never recorded — only the decision.
+`requested` is what the classifier said, `applied` is what actually ran, and `clamped` says whether the model could not honour it. Retries and recoveries reuse the previous decision instead of paying for another classifier call.
 
-Retries and recoveries reuse the previous decision instead of paying for another classifier call.
+## Install variants
 
-## Boundaries
-
-- **One decision per user prompt.** Tool loops inside that turn keep the same level. If a task turns out to be harder mid-run, raise the level yourself.
-- **The classifier can be wrong.** It scores the sentence you wrote, not what the turn will actually require. Keep `/autothink off` and manual `/thinking` as the override.
-- **The plugin advises; your model decides.** If the model doesn't support a level, the applied level differs from the requested one — the `clamped` field in the session entry says when.
-- **Foreground subagents don't load it.** A detached (async) subagent session loads ambient extensions and decides for itself; a foreground `async: false` subagent runs in-process without it, and its level comes from the agent configuration.
-- **No benchmark claims.** It reports the level distribution, not a measured saving. Whether it saves tokens depends on how many light tasks sit in your day.
-
-## 中文速览
-
-Pi 的单文件扩展：**每条消息进来，先让一个分类器模型（默认 TypeSafe 的 Jev）判一句「这件事要想多深」，再把当前模型的思考档位调到对应那一档。**
-
-只换档位、不换模型，上下文缓存不受影响。判不出来、报错、或 4 秒超时，就退回本地关键词判断，不会卡住你。
-
-- 开关：`/autothink on|off|status`、`PI_AUTO_THINKING=0`、`pi --auto-thinking`
-- 换分类器：`PI_AUTO_THINKING_MODEL=provider/modelId`
-- 前提：Pi 1.4.0+、任一分类器凭据、当前模型支持思考档
-- 边界：一条消息只判一次；它会判错；模型不支持的档会被钳制；后台子代理各判各的
+```bash
+pi install npm:pi-autothink                          # npm
+pi install git:github.com/loofare/pi-autothink        # git
+pi install ./pi-autothink                            # local checkout
+pi -e /path/to/pi-autothink                          # try once, don't add to settings
+```
 
 ## License
 

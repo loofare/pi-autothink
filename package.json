@@ -30,7 +30,8 @@
   "files": [
     "extensions",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "README.zh-CN.md"
   ],
   "bugs": {
     "url": "https://github.com/loofare/pi-autothink/issues"
