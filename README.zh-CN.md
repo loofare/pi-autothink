@@ -42,6 +42,57 @@ pi install npm:pi-autothink          # 或：pi install git:github.com/loofare/p
 
 **默认开启**。关掉用 `/autothink off`，或启动时 `PI_AUTO_THINKING=0`。
 
+## 判档的这个模型，从哪来？
+
+这个插件**不自己存密钥**。它去问 Pi：现在哪些分类器已经有凭据了？用第一个能用的——默认就是 TypeSafe 的 JEV。也就是说，你在 Pi 里登录过一次，所有扩展都能用，不用每个插件单独配。
+
+```bash
+/autothink status     # 它找到了什么
+/autothink setup      # 什么都没有时，告诉你要跑哪一条命令
+```
+
+| 你想用 | 怎么做 | 密钥存在哪 |
+|---|---|---|
+| TypeSafe Jev（默认） | `/login typesafe` | Pi 的 `auth.json`，或 `TYPESAFE_API_KEY` |
+| OpenRouter | `/login openrouter` | 浏览器登录或 `OPENROUTER_API_KEY`，能跑 Jev 和 Clef |
+| Cloudflare Workers AI | `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` | 环境变量，或 `auth.json` |
+| Vercel AI Gateway | `AI_GATEWAY_API_KEY` | 环境变量 |
+| OpenCode | `OPENCODE_API_KEY` | 环境变量 |
+| OpenAI（GPT-6 Luna） | `OPENAI_API_KEY` | 环境变量 |
+| 什么都不配 | 不用管 | 退回关键词判断，不会卡住你 |
+
+接完之后再跑一次 `/autothink setup`，它会重新探测并告诉你结果。
+
+## 可选配置文件
+
+不配也能用。想配的话：
+
+- 用户级：`~/.pi/agent/pi-autothink/config.json`
+- 项目级：`<项目>/.pi/pi-autothink/config.json`（优先于用户级）
+
+```json
+{
+  "minLevel": "low",
+  "maxLevel": "high",
+  "timeoutMs": 3000,
+  "model": "typesafe/jev-latest",
+  "enabled": true,
+  "debug": false,
+  "maxPromptChars": 6000
+}
+```
+
+| 字段 | 作用 |
+|---|---|
+| `minLevel` / `maxLevel` | 自己定下限和上限。`"minLevel": "low"` 是不许它掉到 low 以下；`"maxLevel": "high"` 是大仓库里给自己封顶省钱 |
+| `model` | 指定分类器，`provider/modelId`，等同 `PI_AUTO_THINKING_MODEL` |
+| `timeoutMs` | 判档超时，默认 `4000` |
+| `maxPromptChars` | 发多少字过去，默认 `6000` |
+| `enabled` | 启动时开不开 |
+| `debug` | 把每次判定打到 stderr |
+
+**优先级：** 环境变量 → 项目配置 → 用户配置 → 内置默认。写错了（打错字、类型不对、下限比上限高）只警告并忽略，不会让插件跑不起来。
+
 ## 为什么要这个
 
 Pi 把思考档位跟模型选择存在一起，所以它会一直停在你上次留下的位置。于是只有两种用法，都不太好：
@@ -87,8 +138,9 @@ Pi 把思考档位跟模型选择存在一起，所以它会一直停在你上�
 
 | 控制 | 作用 |
 |---|---|
+| `/autothink setup` | 引导接线：自动找分类器，找不到就告诉你要跑哪一条命令 |
 | `/autothink on` · `/autothink off` | 会话里开关 |
-| `/autothink status` | 看开关状态、找到哪个分类器、当前档位、上一次判定 |
+| `/autothink status` | 看开关状态、用的哪个分类器、配置从哪来、上下限、上一次判定 |
 | `PI_AUTO_THINKING=0` | 这个进程关掉 |
 | `pi --auto-thinking` | 这个进程强制开 |
 | `PI_AUTO_THINKING_MODEL=provider/modelId` | 换一个分类器，例如 `openai/gpt-6-luna` |

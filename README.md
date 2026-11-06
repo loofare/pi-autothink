@@ -42,6 +42,57 @@ Then restart Pi (or `/reload`) and check it is live:
 
 It is **on by default**. Turn it off with `/autothink off` or `PI_AUTO_THINKING=0`.
 
+## Where does the judging model come from?
+
+This plugin **stores no keys of its own**. It asks Pi which classifier models already have credentials and uses the first one that answers — TypeSafe Jev unless you say otherwise. That means one setup covers every Pi extension: log in once, and this works.
+
+```bash
+/autothink status     # what did it find?
+/autothink setup      # nothing yet: tells you the one command to run
+```
+
+| You want | Do this | Where the key lives |
+|---|---|---|
+| TypeSafe Jev (default) | `/login typesafe` | Pi's `auth.json`, or `TYPESAFE_API_KEY` |
+| OpenRouter | `/login openrouter` | OAuth sign-in or `OPENROUTER_API_KEY`; serves Jev and Clef |
+| Cloudflare Workers AI | `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` | environment, or `auth.json` |
+| Vercel AI Gateway | `AI_GATEWAY_API_KEY` | environment |
+| OpenCode | `OPENCODE_API_KEY` | environment |
+| OpenAI (GPT-6 Luna) | `OPENAI_API_KEY` | environment |
+| Nothing at all | do nothing | keyword fallback, never blocks the turn |
+
+Run `/autothink setup` again afterwards; it re-checks and reports what it found.
+
+## Optional config file
+
+No config needed. When you want one:
+
+- user: `~/.pi/agent/pi-autothink/config.json`
+- project: `<project>/.pi/pi-autothink/config.json` (wins over the user file)
+
+```json
+{
+  "minLevel": "low",
+  "maxLevel": "high",
+  "timeoutMs": 3000,
+  "model": "typesafe/jev-latest",
+  "enabled": true,
+  "debug": false,
+  "maxPromptChars": 6000
+}
+```
+
+| Key | What it does |
+|---|---|
+| `minLevel` / `maxLevel` | Your own floor and ceiling. `"minLevel": "low"` keeps the classifier from ever dropping below low; `"maxLevel": "high"` caps cost on a big repo |
+| `model` | Force a specific classifier, `provider/modelId` — same as `PI_AUTO_THINKING_MODEL` |
+| `timeoutMs` | Classifier timeout, default `4000` |
+| `maxPromptChars` | How much of the prompt is sent, default `6000` |
+| `enabled` | Start enabled or not |
+| `debug` | Print each decision to stderr |
+
+**Precedence:** environment variable → project config → user config → built-in default. A bad value (typo, wrong type, `minLevel` above `maxLevel`) is ignored with a warning, never fatal.
+
 ## Why this exists
 
 Pi stores the thinking level next to the model selection, so it stays wherever you left it. That leaves two habits, both bad:
@@ -87,8 +138,9 @@ Request text is clipped to 6000 characters. Timeout is 4000 ms.
 
 | Control | Effect |
 |---|---|
+| `/autothink setup` | Guided connect: finds a classifier, or tells you the one command to run |
 | `/autothink on` · `/autothink off` | Toggle during a session |
-| `/autothink status` | On/off, classifier found, current level, last decision |
+| `/autothink status` | On/off, which classifier, where the setting came from, bounds, last decision |
 | `PI_AUTO_THINKING=0` | Disable for one process |
 | `pi --auto-thinking` | Force on for one process |
 | `PI_AUTO_THINKING_MODEL=provider/modelId` | Use another classifier, e.g. `openai/gpt-6-luna` |

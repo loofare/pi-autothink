@@ -1,6 +1,6 @@
 {
   "name": "pi-autothink",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pi extension: let a classifier model pick the thinking level for every prompt, so mechanical prompts stay cheap and hard ones get real reasoning — without switching models.",
   "keywords": [
     "pi-package",

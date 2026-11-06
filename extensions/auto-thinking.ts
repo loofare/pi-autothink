@@ -24,6 +24,10 @@
 // session can both be audited afterwards. The prompt, credentials, and user
 // content are never recorded.
 
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai'
@@ -31,6 +35,7 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 type Level = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** Ascending effort order, used for clamping to what a model supports. */
+/** Ascending effort order, used for clamping and for config validation. */
 const ORDER: Level[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 /** Score scale handed to the classifier: index -> meaning. */
@@ -64,6 +69,92 @@ const CANDIDATES: Array<[provider: string, id: string]> = [
 
 const CLASSIFY_TIMEOUT_MS = 4000
 const MAX_PROMPT_CHARS = 6000
+
+/** Config lives in a folder of its own so it never collides with Pi's files. */
+const CONFIG_DIR = 'pi-autothink'
+const CONFIG_FILE = 'config.json'
+
+/**
+ * Optional settings, read from JSON so nobody has to remember env vars.
+ * Order of precedence: env var > project config > user config > built-in default.
+ * Every field is optional; a bad value is ignored with a warning, never fatal.
+ */
+interface Config {
+  enabled?: boolean
+  /** Classifier to use, `provider/modelId`. Same as PI_AUTO_THINKING_MODEL. */
+  model?: string
+  /** Never decide below this level, e.g. "low" so simple work stays smart enough. */
+  minLevel?: Level
+  /** Never decide above this level, e.g. "high" to cap cost on a big repo. */
+  maxLevel?: Level
+  timeoutMs?: number
+  maxPromptChars?: number
+  debug?: boolean
+}
+
+interface LoadedConfig {
+  values: Config
+  /** Files that were actually read, in precedence order (last wins). */
+  sources: string[]
+  warnings: string[]
+}
+
+function readJsonObject(file: string, warnings: string[]): Config | undefined {
+  if (!fs.existsSync(file)) return undefined
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      warnings.push(`${file}: not a JSON object, ignored`)
+      return undefined
+    }
+    return parsed as Config
+  } catch (error) {
+    warnings.push(`${file}: ${error instanceof Error ? error.message : 'unreadable'}`)
+    return undefined
+  }
+}
+
+/** Keep the fields that make sense; drop bad values loudly but harmlessly. */
+function sanitize(raw: Config | undefined, file: string, warnings: string[]): Config {
+  if (!raw) return {}
+  const out: Config = {}
+  const take = <K extends keyof Config>(key: K, ok: (v: unknown) => boolean, expect: string) => {
+    const value = raw[key]
+    if (value === undefined) return
+    if (ok(value)) out[key] = value as Config[K]
+    else warnings.push(`${file}: ${String(key)} should be ${expect}, ignored`)
+  }
+  take('enabled', (v) => typeof v === 'boolean', 'true or false')
+  take('model', (v) => typeof v === 'string' && v.includes('/'), '"provider/modelId"')
+  take('minLevel', (v) => typeof v === 'string' && ORDER.includes(v as Level), ORDER.join(' / '))
+  take('maxLevel', (v) => typeof v === 'string' && ORDER.includes(v as Level), ORDER.join(' / '))
+  take('timeoutMs', (v) => typeof v === 'number' && v > 0 && v <= 60000, 'a number of milliseconds')
+  take('maxPromptChars', (v) => typeof v === 'number' && v >= 200, 'a number of characters')
+  take('debug', (v) => typeof v === 'boolean', 'true or false')
+  return out
+}
+
+function loadConfig(cwd: string): LoadedConfig {
+  const warnings: string[] = []
+  const userFile = path.join(os.homedir(), '.pi', 'agent', CONFIG_DIR, CONFIG_FILE)
+  const projectFile = path.join(cwd, '.pi', CONFIG_DIR, CONFIG_FILE)
+  const sources: string[] = []
+  const values: Config = {}
+  for (const file of [userFile, projectFile]) {
+    const raw = readJsonObject(file, warnings)
+    if (!raw) continue
+    sources.push(file)
+    Object.assign(values, sanitize(raw, file, warnings))
+  }
+  if (values.minLevel !== undefined && values.maxLevel !== undefined) {
+    if (ORDER.indexOf(values.minLevel) > ORDER.indexOf(values.maxLevel)) {
+      warnings.push(`${CONFIG_FILE}: minLevel is above maxLevel, both ignored`)
+      delete values.minLevel
+      delete values.maxLevel
+    }
+  }
+  return { values, sources, warnings }
+}
 
 /** Session entry type for the audit trail; custom entries never reach the model. */
 const ENTRY_TYPE = 'auto-thinking'
@@ -99,6 +190,14 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n…`
 }
 
+/** Apply the user's own floor/ceiling before the model gets a say. */
+function applyBounds(desired: Level, config: Config): Level {
+  let level = desired
+  if (config.minLevel && ORDER.indexOf(level) < ORDER.indexOf(config.minLevel)) level = config.minLevel
+  if (config.maxLevel && ORDER.indexOf(level) > ORDER.indexOf(config.maxLevel)) level = config.maxLevel
+  return level
+}
+
 /** The level a model can actually apply, nearest to `desired`. */
 function clampToModel(model: Model<Api> | undefined, desired: Level): Level {
   if (!model) return desired
@@ -132,8 +231,8 @@ function heuristic(prompt: string): Decision {
 }
 
 /** First classifier model in CANDIDATES whose provider has credentials. */
-async function findClassifier(ctx: ExtensionContext) {
-  const override = process.env.PI_AUTO_THINKING_MODEL?.trim()
+async function findClassifier(ctx: ExtensionContext, configModel?: string) {
+  const override = (process.env.PI_AUTO_THINKING_MODEL?.trim() || configModel?.trim()) ?? ''
   if (override) {
     const [provider, ...rest] = override.split('/')
     const id = rest.join('/')
@@ -154,8 +253,9 @@ async function findClassifier(ctx: ExtensionContext) {
   return undefined
 }
 
-async function decide(prompt: string, ctx: ExtensionContext): Promise<Decision> {
-  const model = await findClassifier(ctx)
+async function decide(prompt: string, ctx: ExtensionContext, config: Config = {}): Promise<Decision> {
+  const model = await findClassifier(ctx, config.model)
+  const timeoutMs = config.timeoutMs ?? CLASSIFY_TIMEOUT_MS
   if (!model) return heuristic(prompt)
 
   try {
@@ -163,7 +263,7 @@ async function decide(prompt: string, ctx: ExtensionContext): Promise<Decision> 
       model,
       {
         state: {
-          prompt: clip(prompt, MAX_PROMPT_CHARS),
+          prompt: clip(prompt, config.maxPromptChars ?? MAX_PROMPT_CHARS),
           workingDirectory: ctx.cwd,
           activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
         },
@@ -176,7 +276,7 @@ async function decide(prompt: string, ctx: ExtensionContext): Promise<Decision> 
           },
         },
       },
-      { signal: ctx.signal ? AbortSignal.any([ctx.signal, AbortSignal.timeout(CLASSIFY_TIMEOUT_MS)]) : AbortSignal.timeout(CLASSIFY_TIMEOUT_MS) },
+      { signal: ctx.signal ? AbortSignal.any([ctx.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) },
     )
 
     if (result.stopReason !== 'stop') return heuristic(prompt)
@@ -197,9 +297,13 @@ async function decide(prompt: string, ctx: ExtensionContext): Promise<Decision> 
 }
 
 export default function (pi: ExtensionAPI) {
-  let enabled = process.env.PI_AUTO_THINKING === undefined || envFlag('PI_AUTO_THINKING')
+  const envEnable = process.env.PI_AUTO_THINKING === undefined || envFlag('PI_AUTO_THINKING')
+  let enabled = envEnable
+  let config: Config = {}
+  let configSources: string[] = []
   let lastApplied: { prompt: string; level: Level; detail: string } | undefined
   let announce = true
+  let warned = false
 
   pi.registerFlag('auto-thinking', {
     description: 'Let a classifier model choose the thinking level for each prompt',
@@ -207,26 +311,98 @@ export default function (pi: ExtensionAPI) {
     default: enabled,
   })
 
+  /** Where each setting came from, so `status` can explain itself. */
+  function precedence(model: string | undefined): string {
+    const envModel = process.env.PI_AUTO_THINKING_MODEL?.trim()
+    if (envModel) return 'PI_AUTO_THINKING_MODEL'
+    if (config.model) return `config (${model ?? 'unresolved'})`
+    return 'built-in candidate list'
+  }
+
+  function boundsLabel(): string {
+    if (!config.minLevel && !config.maxLevel) return 'none'
+    return `${config.minLevel ?? 'off'} … ${config.maxLevel ?? 'max'}`
+  }
+
+  /** One-shot, non-blocking nudge when the extension is running degraded. */
+  async function warnOnce(ctx: ExtensionContext) {
+    if (warned || !enabled) return
+    warned = true
+    const model = await findClassifier(ctx, config.model)
+    for (const warning of loadConfig(ctx.cwd).warnings) ctx.ui.notify(`autothink: ${warning}`, 'warning')
+    if (!model) {
+      ctx.ui.notify(
+        'autothink: no classifier credentials, using the keyword fallback.\nRun /autothink setup to connect one (Jev from TypeSafe, or any Pi classifier).',
+        'warning',
+      )
+    }
+  }
+
+  async function setup(ctx: ExtensionContext) {
+    const model = await findClassifier(ctx, config.model)
+    if (model) {
+      ctx.ui.notify(
+        `autothink is ready: ${model.provider}/${model.id} (${precedence(`${model.provider}/${model.id}`)}).`,
+        'info',
+      )
+      return
+    }
+
+    const choice = await ctx.ui.select(
+      'No classifier credentials found. Which one do you want to connect?\n(After connecting, run /autothink setup again.)',
+      [
+        'TypeSafe Jev  — the default. Get a key at https://typesafe.ai, then run: /login typesafe',
+        'OpenRouter   — Jev and Clef. Sign in or paste a key with: /login openrouter',
+        'Cloudflare Workers AI — CLOUDFLARE_API_KEY + CLOUDFLARE_ACCOUNT_ID',
+        'Keep using the keyword fallback for now',
+      ],
+    )
+
+    if (!choice) return
+    if (choice.startsWith('TypeSafe')) {
+      ctx.ui.notify('Run /login typesafe in Pi and paste your TypeSafe API key.\nThen run /autothink setup again.', 'info')
+    } else if (choice.startsWith('OpenRouter')) {
+      ctx.ui.notify('Run /login openrouter in Pi (browser sign-in or API key).\nThen run /autothink setup again.', 'info')
+    } else if (choice.startsWith('Cloudflare')) {
+      ctx.ui.notify(
+        'Export CLOUDFLARE_API_KEY and CLOUDFLARE_ACCOUNT_ID, then restart Pi.\nOr add the provider to ~/.pi/agent/auth.json.',
+        'info',
+      )
+    } else {
+      ctx.ui.notify(
+        'Fine. The keyword fallback is coarse but never blocks: /autothink status shows which path each decision took.',
+        'info',
+      )
+    }
+  }
+
   pi.registerCommand('autothink', {
-    description: 'Auto thinking level: /autothink [on|off|status]',
+    description: 'Auto thinking level: /autothink [on|off|status|setup]',
     handler: async (args, ctx) => {
       const action = (args ?? '').trim().toLowerCase()
       if (action === 'on' || action === 'off') {
         enabled = action === 'on'
-        const model = await findClassifier(ctx)
+        const model = await findClassifier(ctx, config.model)
         ctx.ui.notify(
           enabled
-            ? `Auto thinking on${model ? ` (${model.provider}/${model.id})` : ' — no classifier credentials, using heuristic'}`
+            ? `Auto thinking on${model ? ` (${model.provider}/${model.id})` : ' — no classifier credentials, using the keyword fallback'}`
             : 'Auto thinking off',
           'info',
         )
         return
       }
-      const model = await findClassifier(ctx)
+      if (action === 'setup') {
+        await setup(ctx)
+        return
+      }
+      const model = await findClassifier(ctx, config.model)
       const lines = [
         `auto thinking: ${enabled ? 'on' : 'off'}`,
-        `classifier: ${model ? `${model.provider}/${model.id}` : 'none (heuristic fallback)'}`,
+        `classifier: ${model ? `${model.provider}/${model.id}` : 'none — keyword fallback (run /autothink setup)'}`,
+        `classifier source: ${precedence(model ? `${model.provider}/${model.id}` : undefined)}`,
+        `level bounds: ${boundsLabel()}`,
         `current level: ${ctx.thinkingLevel}`,
+        `config: ${configSources.length ? configSources.join(', ') : 'none (defaults)'}`,
         lastApplied ? `last decision: ${lastApplied.level} (${lastApplied.detail})` : 'last decision: none yet',
       ]
       ctx.ui.notify(lines.join('\n'), 'info')
@@ -234,9 +410,17 @@ export default function (pi: ExtensionAPI) {
   })
 
   pi.on('session_start', async (_event, ctx) => {
+    const loaded = loadConfig(ctx.cwd)
+    config = loaded.values
+    configSources = loaded.sources
+    if (config.enabled !== undefined) enabled = config.enabled
     enabled = Boolean(pi.getFlag('auto-thinking')) || enabled
     announce = true
+    if (config.debug || envFlag('PI_AUTO_THINKING_DEBUG')) {
+      for (const warning of loaded.warnings) console.error(`[autothink] ${warning}`)
+    }
     ctx.ui.setStatus('autothink', enabled ? 'autothink: on' : undefined)
+    void warnOnce(ctx)
   })
 
   pi.on('before_agent_start', async (event, ctx) => {
@@ -252,10 +436,10 @@ export default function (pi: ExtensionAPI) {
       return
     }
 
-    const decision = await decide(prompt, ctx)
-    const level = clampToModel(ctx.model, decision.level)
+    const decision = await decide(prompt, ctx, config)
+    const level = clampToModel(ctx.model, applyBounds(decision.level, config))
     const changed = level !== ctx.thinkingLevel
-    if (envFlag('PI_AUTO_THINKING_DEBUG')) {
+    if (config.debug || envFlag('PI_AUTO_THINKING_DEBUG')) {
       console.error(`[autothink] ${decision.level} -> ${level} (${decision.source}${decision.model ? ` via ${decision.model}` : ''}: ${decision.detail})`)
     }
     try {
